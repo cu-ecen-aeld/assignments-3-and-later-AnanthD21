@@ -1,15 +1,18 @@
-#make file for compiling writer.c for both native and target architectures
 CROSS_COMPILE = 
-	
+CC = $(CROSS_COMPILE)gcc
+
+CFLAGS = -g -Wall -Werror
+
 default: writer
-	
-all: writer.o
-	$(CROSS_COMPILE)gcc -g -Wall writer.o -o writer
+
+writer: writer.o
+	$(CC) $< -o $@
 	
 writer.o: writer.c
-	$(CROSS_COMPILE)gcc -g -Wall -c -o writer.o writer.c
+	$(CC) $(CFLAGS) -c $< -o $@
 	
-clean:
-	rm -f *.o writer
+clean: 
+	rm -f writer writer.o
 
+.PHONY: clean
 
