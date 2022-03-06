@@ -15,6 +15,7 @@
 #endif
 
 #include "aesd-circular-buffer.h"
+#include <stdio.h>
 
 /**
  * @param buffer the buffer to search for corresponding offset.  Any necessary locking must be performed by caller.
@@ -32,7 +33,58 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
     /**
     * TODO: implement per description
     */
-    return NULL;
+    
+    int i = 0;
+    size_t cumulativeSize = 0, prevCumulativeSize = 0;
+    int currIndex = 0;
+    
+    struct aesd_buffer_entry *retBufPtr = NULL;
+    
+    if(NULL == buffer)
+    {
+       return NULL;
+    }
+    
+    if(NULL == entry_offset_byte_rtn)
+    {
+       return NULL;
+    }
+    
+    struct aesd_circular_buffer *cirBufPtr = buffer;
+
+    /*
+       to iterate through the entry array starting at out_offs 
+       since it is the oldest entry present in the array
+       and then find the entry_offset from char_offset
+    */
+    for( i = 0; i < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; i++)
+    {       
+       currIndex = ((buffer -> out_offs) + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    
+       if( ((cirBufPtr -> entry[currIndex]).buffptr) == NULL)
+       {
+          break;
+       }
+       
+       /*
+         store the count till previous aesd_buffer_entry, this will
+         be handy when updating the entry_offset_byte_rtn
+       */   
+       prevCumulativeSize = cumulativeSize;
+
+       /*update the count*/
+       cumulativeSize = cumulativeSize + (cirBufPtr -> entry[currIndex]).size;      
+       
+       /*implies the provided char_offset lies within current entry structure object*/
+       if(char_offset < cumulativeSize)
+       {
+          *entry_offset_byte_rtn = char_offset - prevCumulativeSize;
+          retBufPtr = &(cirBufPtr -> entry[currIndex]);
+          break;
+       }
+    }
+    
+    return retBufPtr;
 }
 
 /**
@@ -45,8 +97,42 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
 {
     /**
-    * TODO: implement per description 
+    * TODO: implement per description
     */
+    
+    /*NULL ptr check*/
+    if(NULL == buffer)
+    {
+       return;
+    }
+    
+    if(NULL == add_entry)
+    {
+       return;
+    }
+    
+    /*add the new add_entry to circular buffer*/
+    buffer->entry [buffer->in_offs] = *add_entry;
+    
+    /*
+       when buffer is full and both in offset and out offset point at the same entry
+       we need to update out offset in order to keep it the oldest entry
+    */
+    if((buffer->full) && (buffer -> out_offs == buffer -> in_offs))
+    {
+       (buffer -> out_offs)++;
+       buffer -> out_offs = (buffer -> out_offs) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    }
+    
+    /*update the in offset after adding each element into circular buffer*/
+    
+    (buffer -> in_offs)++; 
+    buffer -> in_offs = (buffer -> in_offs) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    
+    if((buffer -> in_offs) == (buffer -> out_offs))
+    {
+       buffer->full = true;
+    }
 }
 
 /**
