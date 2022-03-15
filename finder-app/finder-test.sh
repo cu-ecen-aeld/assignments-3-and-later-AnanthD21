@@ -8,7 +8,7 @@ set -u
 NUMFILES=10
 WRITESTR=AELD_IS_FUN
 WRITEDIR=/tmp/aeld-data
-username=$(cat conf/username.txt)
+username=$(cat /etc/finder-app/conf/username.txt)
 
 if [ $# -lt 2 ]
 then
@@ -44,13 +44,27 @@ fi
 echo "Removing the old writer utility and compiling as a native application"
 #make clean
 #make
+# Check if writer executable exists in PATH
+if [ -z $(which writer) ]
+then
+	echo "writer not in PATH"
+	exit 1
+fi
+
+# Check if finder script exists in PATH
+if [ -z $(which finder.sh) ]
+then
+	echo "finder.sh not in PATH"
+	exit 1
+fi
 
 for i in $( seq 1 $NUMFILES)
 do
-	./writer "$WRITEDIR/${username}$i.txt" "$WRITESTR" 
+	writer "$WRITEDIR/${username}$i.txt" "$WRITESTR" 
 done
 
-OUTPUTSTRING=$(./finder.sh "$WRITEDIR" "$WRITESTR")
+OUTPUTSTRING=$(finder.sh "$WRITEDIR" "$WRITESTR")
+writer /tmp/assignment-4-result.txt "$OUTPUTSTRING"
 
 set +e
 echo ${OUTPUTSTRING} | grep "${MATCHSTR}"

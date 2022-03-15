@@ -3,6 +3,8 @@ CC = $(CROSS_COMPILE)gcc
 
 CFLAGS = -g -Wall -Werror
 
+all: writer
+
 default: writer
 
 writer: writer.o
