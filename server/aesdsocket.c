@@ -35,7 +35,14 @@
 #include <poll.h>
 
 /*macros*/
+#define USE_AESD_CHAR_DEVICE 1
+
+#ifdef USE_AESD_CHAR_DEVICE
+#define FILE "/dev/aesdchar"
+#else
 #define FILE "/var/tmp/aesdsocketdata"
+#endif
+
 #define PORT "9000"
 #define BUF_SIZE 1000
 #define MAX_CONNECTIONS 10
@@ -61,7 +68,6 @@ struct slist_data_s
 };
 
 typedef struct slist_data_s slist_data_t;
-
 
 /*****************************************************************
  * To clean all the pending resources
@@ -123,6 +129,7 @@ static void signal_handler(int sig)
  * Returns:
  *   void * --> returns void pointer
  ****************************************************************/
+ #ifndef USE_AESD_CHAR_DEVICE
 void *timer_thread(void *args)
 {
    size_t bufLen;
@@ -210,6 +217,7 @@ void *timer_thread(void *args)
 
   pthread_exit(NULL);
 }
+#endif
 
 /*****************************************************************
  * This function is an entry point of thread which handles 4 tasks:
@@ -226,144 +234,219 @@ void *timer_thread(void *args)
  ****************************************************************/
 void* handlePacketsOfEachClient(void* thread_params)
 {  
-    char buf[BUF_SIZE];
 
-    thread_data* tdParams = (thread_data*)thread_params;
+    thread_data* params = (thread_data*)thread_params;
 
-    int noOfBytesRead = 0;
+    char* client_read_buf = (char*)malloc(sizeof(char) * BUF_SIZE);
+    
+    if(client_read_buf == NULL)
+    {
+       syslog(LOG_ERR,"malloc failed %d\n\r", (int)(params->thread_id));
+       params->isComplete = true;
+    }
+    else
+    {
+       /*zero contents of client_read_buf*/
+       memset(client_read_buf, 0, BUF_SIZE);
+    }
 
-    while(1)
+    uint32_t ctr = 1; 
+    int curr_pos = 0;
+
+    while(!(params->isComplete))
     {
        /*to read packets from client*/
-       noOfBytesRead = read(tdParams->clientfd, buf, (BUF_SIZE));
+       int noOfBytesRead = read(params->clientfd, client_read_buf + curr_pos, BUF_SIZE);
         
        if (noOfBytesRead < 0) 
        {
-           syslog(LOG_ERR, "reading from socket errno=%d\n", errno);
-           tdParams->isComplete = true;
-           pthread_exit(NULL);
+          syslog(LOG_ERR, "reading from socket errno=%d\n", errno);
+          free(client_read_buf);
+          params->isComplete = true;
+          pthread_exit(NULL);
        }
-
 
        if (noOfBytesRead == 0)
-       {
            continue;
-       }
 
+       curr_pos += noOfBytesRead;
+       
        /*
         if a newline is found, it implies we have recived the complete packet
-        so we proceed to next steps
+        thus we break and proceed to next steps
         */
-       if (strchr(buf, '\n')) 
-       {  
-          break; 
+       if (strchr(client_read_buf, '\n')) 
+       {
+           break;
        } 
+       
+       /*else we need to expand the size of our buffer, therefore we realloc*/
+       ctr++;
+       client_read_buf = (char*)realloc(client_read_buf, (ctr * BUF_SIZE));
+       
+       if(client_read_buf == NULL)
+       {
+          syslog(LOG_ERR,"realloc error %d\n\r", (int)params->thread_id);
+          free(client_read_buf);
+          params->isComplete = true;
+          pthread_exit(NULL);
+       }
     }
 
-    /*open the file*/
-    int fd = open(FILE, O_RDWR | O_APPEND, 0644);
+    /* open the file/device */
+    int fd = open(FILE, O_RDWR | O_APPEND, 0766);
     
     if (fd < 0)
     {
-       syslog(LOG_ERR, "failed to open a file:%d\n", errno);
-    } 
+       syslog(LOG_ERR, "failed to open a file: %d\n\r", errno);
+    }
+
+    /*to seek to end of the file in order to write to the device*/
+    lseek(fd, 0, SEEK_END);
     
-    int retVal = pthread_mutex_lock(tdParams->mutex);
-    
+    int retVal = pthread_mutex_lock(params->mutex);
     if(retVal)
     {
-        syslog(LOG_ERR, "Error in locking the mutex\n\r");
-        tdParams -> isComplete = true;
+        free(client_read_buf);
+        params->isComplete = true;
         pthread_exit(NULL);
     }
 
-    /*write the packet content read to the FILE*/
-    int writeByteCount = write(fd, buf, noOfBytesRead);
-    
+    /*write the packet content read to the device*/
+    int writeByteCount = write(fd, client_read_buf, curr_pos);
     if(writeByteCount < 0)
     {
-        syslog(LOG_ERR, "Writing to file error no: %d\n\r", errno);
-        
-        tdParams -> isComplete = true;
+        syslog(LOG_ERR, "write to device failed: errno %d\n\r", errno);
+        free(client_read_buf);
+        params->isComplete = true;
         close(fd);
         pthread_exit(NULL);
     }
 
-    retVal = pthread_mutex_unlock(tdParams->mutex);
-    
+    /*to reset file offset back to beginning of file*/
+    lseek(fd, 0, SEEK_SET);
+
+    retVal = pthread_mutex_unlock(params->mutex);
     if(retVal)
     {
-        syslog(LOG_ERR, "Error in unlocking the mutex\n\r");
-        tdParams -> isComplete = true;
+        free(client_read_buf);
+        params->isComplete = true;
         pthread_exit(NULL);
     }
 
     close(fd);
-
+    printf("wrote %d bytes\n\r", writeByteCount);
+    
     int read_offset = 0;
 
-    while(1) 
+    /*to open the device for reading*/
+    int fd_dev = open(FILE, O_RDWR | O_APPEND, 0766);
+    if(fd_dev < 0)
     {
-        /*open the file*/
-        int fd = open(FILE, O_RDWR | O_APPEND, 0644);
-        
-        if(fd < 0)
-        {
-            syslog(LOG_ERR, "failed to open a file:%d\n", errno);
-            continue; 
-        }
-
-        /*move offset back to start since we have used write() previously*/
-        lseek(fd, read_offset, SEEK_SET);
-
-
-        int retVal = pthread_mutex_lock(tdParams->mutex);
-        
-        if(retVal)
-        {
-            syslog(LOG_ERR, "Error in locking the mutex\n\r");
-            tdParams -> isComplete = true;
-            pthread_exit(NULL);
-        }
-        
-        /*read the contents of FILE to buffer buf*/
-        int noOfBytesRead = read(fd, buf, BUF_SIZE);
-
-        retVal = pthread_mutex_unlock(tdParams->mutex);   
-        
-        if(retVal)
-        {
-            syslog(LOG_ERR, "Error in locking the mutex\n\r");
-            tdParams -> isComplete = true;
-            pthread_exit(NULL);
-        }
-        
-        close(fd);
-        
-        if(noOfBytesRead < 0)
-        {
-            syslog(LOG_ERR, "failed to read from file:%d\n", errno);
-            continue;
-        }
-
-        if(noOfBytesRead == 0)
-        {
-            break;
-        }
-        
-        /*write the buf contents read from FILE above to the client*/
-        int writeByteCount = write(tdParams->clientfd, buf, noOfBytesRead);
-
-        if(writeByteCount < 0)
-        {
-            syslog(LOG_ERR, "failed to write on client fd:%d\n", errno);
-            continue;
-        }
-
-        read_offset += writeByteCount;
+        syslog(LOG_ERR, "FILE open failed, errno=%d\n", errno);
+        free(client_read_buf);
+        params->isComplete = true;
+        pthread_exit(NULL);    
     }
 
-    tdParams -> isComplete = true;
+    /*move offset back to start since we have used write() previously*/
+    lseek(fd_dev, read_offset, SEEK_SET);
+
+    char* client_write_buf = (char*)malloc(sizeof(char) * BUF_SIZE);
+
+    curr_pos = 0;
+    
+    /*to clear the buffer contents*/
+    memset(client_write_buf,0, BUF_SIZE);
+    
+    /*intially set the reallocing buffer counter to 1*/
+    ctr = 1;
+    
+    while(1) 
+    {
+       retVal = pthread_mutex_lock(params->mutex);
+        
+       if(retVal)
+       {
+          free(client_read_buf);
+          free(client_write_buf);
+          params->isComplete = true;
+          pthread_exit(NULL);
+       }
+
+       /*read the device one byte at a time and proceed*/
+       int noOfBytesRead = read(fd_dev, &client_write_buf[curr_pos], 1);
+
+       retVal = pthread_mutex_unlock(params->mutex);   
+       
+       if(retVal)
+       {
+          free(client_read_buf);
+          free(client_write_buf);
+          params->isComplete = true;
+          pthread_exit(NULL);
+       }
+
+       if(noOfBytesRead < 0)
+       {
+          syslog(LOG_ERR, "Error reading from file errno %d\n", errno);
+          break;
+       }
+
+       if(noOfBytesRead == 0)
+           break;
+
+        if(client_write_buf[curr_pos] == '\n')
+        {
+            /*write the buf contents read from FILE above to the client*/
+           int noOfBytesWritten = write(params->clientfd, client_write_buf, curr_pos + 1 );
+           
+           printf("wrote %d bytes to client\n", noOfBytesWritten);
+
+           if(noOfBytesWritten < 0)
+           {
+              printf("errno is %d", errno);
+              syslog(LOG_ERR, "Error writing to client fd %d\n", errno);
+              break;
+           }
+           memset(client_write_buf, 0, (curr_pos + 1));
+
+           curr_pos = 0;
+        } 
+        else 
+        {
+           curr_pos++;
+           
+           /*if we are unable to find '\n; i.e end of a packet, it implies that we need
+             a larger buffer to read contents of the whole packet from the device. Thus
+             we need a realloc*/
+           if(curr_pos > sizeof(client_write_buf))
+           {
+              ctr++;
+              
+              /*reallocate BUF_SIZE amount of bytes every time*/
+              client_write_buf = realloc(client_write_buf, ctr * BUF_SIZE);
+              
+              if(client_write_buf == NULL)
+              {
+                 syslog(LOG_ERR,"realloc error %d\n\r", (int)params->thread_id);
+                 free(client_write_buf);
+                 free(client_read_buf);
+                 params->isComplete = true;
+                 pthread_exit(NULL);
+              }
+           }   
+        }
+    }
+
+    /*to clean up all the resources*/
+    close(fd_dev);
+    
+    free(client_write_buf);
+    free(client_read_buf);
+    
+    params->isComplete = true;
+    
     pthread_exit(NULL);
 }
 
@@ -489,8 +572,10 @@ int main(int argc, char **argv)
     }
 
     /*in order to handle timestamp requirement, spawn a timer thread*/
+#ifndef USE_AESD_CHAR_DEVICE
     pthread_t timer_thread_id; 
     pthread_create(&timer_thread_id, NULL, timer_thread, NULL);
+#endif
 
     /*accept multiple connections from clients, and create a new thread for each client*/
     while(!(signal_recv)) 
@@ -554,8 +639,10 @@ int main(int argc, char **argv)
         }
     }
 
+#ifndef USE_AESD_CHAR_DEVICE
     /*join the timer thread*/
     pthread_join(timer_thread_id, NULL);
+#endif
 
     /*clean up pending nodes if any*/
     while (!SLIST_EMPTY(&head))

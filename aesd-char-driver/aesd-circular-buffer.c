@@ -10,12 +10,15 @@
 
 #ifdef __KERNEL__
 #include <linux/string.h>
+#include <linux/slab.h>
+#define FREE kfree
 #else
 #include <string.h>
+#include <stdlib.h>
+#define FREE free
 #endif
 
 #include "aesd-circular-buffer.h"
-#include <stdio.h>
 
 /**
  * @param buffer the buffer to search for corresponding offset.  Any necessary locking must be performed by caller.
@@ -27,6 +30,7 @@
  * @return the struct aesd_buffer_entry structure representing the position described by char_offset, or
  * NULL if this position is not available in the buffer (not enough data is written).
  */
+
 struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct aesd_circular_buffer *buffer,
 			size_t char_offset, size_t *entry_offset_byte_rtn )
 {
@@ -87,6 +91,7 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
     return retBufPtr;
 }
 
+
 /**
 * Adds entry @param add_entry to @param buffer in the location specified in buffer->in_offs.
 * If the buffer was already full, overwrites the oldest entry and advances buffer->out_offs to the
@@ -94,21 +99,29 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 * Any necessary locking must be handled by the caller
 * Any memory referenced in @param add_entry must be allocated by and/or must have a lifetime managed by the caller.
 */
-void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
+
+const char * aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
 {
     /**
     * TODO: implement per description
     */
     
+    const char* ret_entry = NULL;
+    
     /*NULL ptr check*/
     if(NULL == buffer)
     {
-       return;
+       return ret_entry;
     }
     
     if(NULL == add_entry)
     {
-       return;
+       return ret_entry;
+    }
+    
+    if(buffer->full)
+    {
+       ret_entry = buffer->entry[buffer->out_offs].buffptr;
     }
     
     /*add the new add_entry to circular buffer*/
@@ -133,12 +146,34 @@ void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const s
     {
        buffer->full = true;
     }
+    
+    return ret_entry;
 }
 
 /**
 * Initializes the circular buffer described by @param buffer to an empty struct
 */
-void aesd_circular_buffer_init(struct aesd_circular_buffer *buffer)
+void aesd_circular_buffer_init(struct aesd_circular_buffer *buffer) 
 {
     memset(buffer,0,sizeof(struct aesd_circular_buffer));
+    buffer->full = false; 
+}
+
+/*to free the allocated memory*/
+void aesd_circular_buffer_cleanup(struct aesd_circular_buffer *buffer) 
+{
+    struct aesd_circular_buffer *cir_buf = buffer;
+    struct aesd_buffer_entry *buf_entry;
+    uint8_t index;
+
+    AESD_CIRCULAR_BUFFER_FOREACH(buf_entry,cir_buf,index) 
+    {
+        if(buf_entry->buffptr != NULL)
+        {
+         
+            FREE((void*)buf_entry->buffptr);    
+            
+        }
+        
+    }
 }
